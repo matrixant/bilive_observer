@@ -12,7 +12,7 @@ enum RequestType {
 }
 
 # http 请求间隔，建议请求间隔大于 1 秒。（规避反爬虫机制）
-@export_range(1, 5, 0.1) var request_interval := 1.2
+@export_range(1, 5, 0.1) var request_interval := 1.0
 
 # 连接请求间隔定时器
 var _http_req_timer := Timer.new()
@@ -51,7 +51,7 @@ func _ready() -> void:
 			if not _http_request_list.is_empty() and _http.get_http_client_status() == HTTPClient.STATUS_DISCONNECTED:
 				var req = _http_request_list.pop_front()
 				_http_request(req.url, req.method)
-				print_debug("Request next. %d" % _http_request_list.size())
+#				print_debug("Request next. %d" % _http_request_list.size())
 	)
 #	处理 HTTP 请求结果
 	add_child(_http)
@@ -87,7 +87,7 @@ func _ready() -> void:
 			if not _http_request_list.is_empty() and _http_req_timer.is_stopped():
 				var req = _http_request_list.pop_front()
 				_http_request(req.url, req.method)
-				print_debug("Request next. %d" % _http_request_list.size())
+#				print_debug("Request next. %d" % _http_request_list.size())
 	)
 	
 	live_apis = JSON.parse_string(FileAccess.open(live_api_file, FileAccess.READ).get_as_text())

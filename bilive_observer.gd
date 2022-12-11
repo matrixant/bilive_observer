@@ -31,6 +31,7 @@ const MessageType := {
 	"LIKE_INFO_UPDATE": "LIKE_INFO_V3_UPDATE",  # 点赞数更新
 	
 #	下面几个接收到过，但没有研究具体代表什么
+	"SC_DEL": "SUPER_CHAT_MESSAGE_DELETE",
 	"COMMON_NOTICE_DANMUKU": "COMMON_NOTICE_DANMUKU",
 	"PREPARING": "PREPARING",
 	"SHOPPING_CART_SHOW": "SHOPPING_CART_SHOW",
@@ -52,7 +53,7 @@ const MessageType := {
 # 显示在地址栏里的房间 ID，有可能不是真实 ID，后续需要通过 API 再获取真实 ID
 @export var room_disp_id: int = 1377453
 # http 请求间隔，建议请求间隔大于 1 秒。（规避反爬虫机制）
-@export_range(1, 5, 0.1) var request_interval := 1.2
+@export_range(1, 5, 0.1) var request_interval := 1.0
 # 心跳包间隔，超过 70 会被断开连接。
 @export_range(10, 60) var heartbeat_interval := 30
 
@@ -79,6 +80,8 @@ signal watch_changed(num: int)  # 观看人数改变
 signal super_chat_received(uid: int, uname: String, sc: Dictionary)  # 付费留言
 
 signal room_real_id_requested(id: int)
+
+signal user_info_requested(uid: int, uname: String, uface: String)
 signal user_face_requested(uid: int, face: Image)
 
 signal msg_received(msg)
@@ -122,9 +125,8 @@ func _ready() -> void:
 		func(room_id: int):
 			_room_real_id = room_id
 			print_debug("Room real id: %s" % _room_real_id)
-#				请求聊天服务器配置，获取 WebSocket 服务器主机列表
+#			请求聊天服务器配置，获取 WebSocket 服务器主机列表
 			_api.chat_conf_request(room_id)
-#			_client.connect_room(room_id)
 	)
 	_api.host_server_requested.connect(
 		func(host_servers: Array):
@@ -136,15 +138,16 @@ func _ready() -> void:
 	)
 	_api.user_info_requested.connect(
 		func(user_info: Dictionary):
-			if not user_info.mid in user_list:
-				var user = BiliveInfo.User.new(user_info.mid, user_info.name, user_info.face)
-				user_list[user_info.mid] = user
-#				print_debug("User info: %s" % user_info)
-				print_debug("%s added: %d" % [user, user_list.size()])
-				_api.user_face_request(user_info.mid, user_info.face)
+#			这里要把 mid 强制转换成整型，否则可能会判断失败
+			if (user_info.mid as int) in user_list:
+				if user_list[(user_info.mid as int)].name.is_empty() or user_list[(user_info.mid as int)].face_url.is_empty():
+					user_list[(user_info.mid as int)].name = user_info.name
+					user_list[(user_info.mid as int)].face_url = user_info.face
+					_api.user_face_request((user_info.mid as int), user_info.face)
 			else:
-				print_debug("User duplicate request %s [%d]" % [user_info.name, user_list.size()])
-#			print("编号：{mid}, 名字：{name}, 性别：{sex}, 等级：{level}".format(user_info))
+				add_user(user_info.mid, user_info.name, user_info.face)
+				print_debug("Add %d, total %d" % [user_info.mid, user_list.size()])
+#			print("[%d]编号：{mid}, 名字：{name}, 性别：{sex}, 等级：{level}".format(user_info) % user_list.size())
 	)
 	_api.user_face_requested.connect(
 		func(uid: int, face_img: Image):
@@ -174,35 +177,38 @@ func _process_message(messages: PackedStringArray):
 #				NOTE: 2022-12-06 弹幕命令后面有的会带一串不明意义的数串，这里单独处理
 				if msg_data.cmd.begins_with(MessageType.DANMU):
 					danmu_received.emit(msg_data.info[2][0], msg_data.info[2][1], msg_data.info[1])
-					if not msg_data.info[2][0] in user_list:
-						_api.user_info_request(msg_data.info[2][0])
+#					先用 uid 和 uname 生成用户对象，后续再请求头像信息
+					add_user(msg_data.info[2][0], msg_data.info[2][1])
 					print("%s[%d]说: %s" % [msg_data.info[2][1], msg_data.info[2][0], msg_data.info[1]])
 #					print_debug(msg_data)
 					continue
-				elif msg_data.cmd.begins_with(MessageType.SC):
-#					NOTE: SC 有两种，SUPER_CHAT_MESSAGE 和 SUPER_CHAT_MESSAGE_JPN
-#					这里直接匹配以 SUPER_CHAT_MESSAGE 开始的消息
-					super_chat_received.emit(msg_data)
-					print_debug("SC: %s" % msg_data)
-					continue
 				match msg_data.cmd:
+					MessageType.SC:
+#						NOTE: SC 有两种，SUPER_CHAT_MESSAGE 和 SUPER_CHAT_MESSAGE_JPN
+#						这里直接匹配 SUPER_CHAT_MESSAGE（JPN结尾的也会同步发送这个版本）
+						super_chat_received.emit(msg_data.data.uid, msg_data.data.user_info.uname, msg_data.data)
+#						付费留言里面用户ID、用户名和头像地址都有了，可以直接请求头像
+						add_user(msg_data.data.uid, msg_data.data.user_info.uname, msg_data.data.user_info.face)
+#						print("[SC]%s[%d]说: %s" % [msg_data.data.user_info.uname, msg_data.data.uid, msg_data.data.message])
 					MessageType.GIFT:
 #						"data":{"action":"投喂","giftId":31531,"giftName":"PK票","giftType":5,"num":1,"uid":1234567,"uname":"ABC",...}
 						gift_received.emit(msg_data.data.uid, msg_data.data.uname, msg_data.data)
-						if not msg_data.data.uid in user_list:
-							_api.user_info_request(msg_data.data.uid)
-						print("收到礼物: %s x %d" % [msg_data.data.giftName, msg_data.data.num])
+#						礼物消息里面用户ID、用户名和头像地址都有了，可以直接请求头像 
+						add_user(msg_data.data.uid, msg_data.data.uname, msg_data.data.face)
+#						print("%s%s礼物: %s x %d" % [msg_data.data.uname, msg_data.data.action, msg_data.data.giftName, msg_data.data.num])
 					MessageType.GIFTS:
 #						"data":{"action":"投喂","gift_id":30869,"gift_name":"心动卡","gift_num":0,"total_num":10,"uid":1234567,"uname":"ABC",...}
 						gift_received.emit(msg_data.data.uid, msg_data.data.uname, msg_data.data)
-						print("收到礼物: %s x %d" % [msg_data.data.gift_name, msg_data.data.total_num])
+#						先用 uid 和 uname 生成用户对象，后续再请求头像信息
+						add_user(msg_data.data.uid, msg_data.data.uname)
+#						print("%s%s礼物: %s x %d" % [msg_data.data.uname, msg_data.data.action, msg_data.data.gift_name, msg_data.data.total_num])
 					MessageType.USER_ENTER:
 						user_entered.emit(msg_data.data.uid, msg_data.data.uname)
-						print("%s进入房间" % msg_data.data.uname)
+#						print("%s进入房间" % msg_data.data.uname)
 					MessageType.GUARD_ENTER:
 						guard_entered.emit(msg_data.data.uid)
-						if not msg_data.data.uid in user_list:
-							_api.user_info_request(msg_data.data.uid)
+#						先用 uid 生成用户对象，后续再请求详细信息
+						add_user(msg_data.data.uid)
 						print(msg_data.data.copy_writing)
 					MessageType.STOP_LIVE_ROOM:
 						pass
@@ -211,13 +217,30 @@ func _process_message(messages: PackedStringArray):
 						pass
 					MessageType.ROOM_POPULARITY:
 						var pop_num: int = msg_data.popularity
-						print("人气: %d" % pop_num);
 						popularity_received.emit(pop_num)
+#						print("人气: %d" % pop_num);
 					_:
-						print("Unhandled: %s" % msg_data.cmd)
+#						print("Unhandled: %s" % msg_data.cmd)
+						pass
 #				print_debug(message)
 			else:
 				printerr("Unexpected data")
 		else:
 			printerr("JSON Parse Error: %s in %s at line %s" % [json.get_error_message(), message, json.get_error_line()])
 
+
+func add_user(uid: int, uname: String = "", uface: String = ""):
+	if uid in user_list:
+#		print("%s already in list" % uid)
+		return
+	var user = BiliveInfo.User.new(uid, uname, uface)
+	user_list[uid] = user
+	if uface.is_empty() or uname.is_empty():
+		_api.user_info_request(uid)
+	else:
+		_api.user_face_request(uid, uface)
+#	user_info_requested.emit(uid, uname, uface)
+	print("%s added: %d" % [user, user_list.size()])
+	print("Request list %d" % _api._user_info_request_uid_list.size())
+	
+	
