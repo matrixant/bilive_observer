@@ -56,7 +56,7 @@ const MessageType := {
 @export_range(1, 5, 0.1) var request_interval := 1.0
 # 心跳包间隔，超过 70 会被断开连接。
 @export_range(10, 60) var heartbeat_interval := 30
-
+# 是否打开 log 文件记录
 @export var log_enabled := false
 
 # 房间真实 ID，B 站给一些大主播会分配短 ID，直接通过短 ID 没法访问到直播间，
@@ -73,21 +73,18 @@ var _host_servers: Array
 
 signal popularity_received(num: int)  # 直播间人气，心跳回复时附带
 signal user_entered(uid: int, uname: String)  # 有人进入直播间
-signal guard_entered(uid: int, guard: Dictionary)
+signal guard_entered(uid: int, guard: Dictionary)  # 舰长进入直播间
 signal danmu_received(uid: int, uname: String, danmu: String)  # 收到弹幕消息
 signal gift_received(uid: int, uname: String, gift: Dictionary)  # 收到礼物
-signal watch_changed(num: int)  # 观看人数改变
 signal super_chat_received(uid: int, uname: String, sc: Dictionary)  # 付费留言
 
-signal room_real_id_requested(id: int)
+signal room_real_id_requested(room_id: int)
+signal room_entered(room_id: int)
 
-signal user_info_requested(uid: int, uname: String, uface: String)
+signal user_info_requested(uid: int, info: Dictionary)
 signal user_face_requested(uid: int, face: Image)
 
-signal msg_received(msg)
-
-
-var user_list: Dictionary
+signal message_unhandled(msg: Dictionary)
 
 var _log_file: FileAccess
 
@@ -102,6 +99,15 @@ func start(room_id: int = -1):
 func stop():
 	_client.stop()
 	pass
+
+
+func request_user_info(uid: int):
+	_api.user_info_request(uid)
+
+
+func request_user_face(uid: int, face_url: String):
+	_api.user_face_request(uid, face_url)
+
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
@@ -124,7 +130,7 @@ func _ready() -> void:
 	_api.room_real_id_requested.connect(
 		func(room_id: int):
 			_room_real_id = room_id
-			print_debug("Room real id: %s" % _room_real_id)
+			print_debug("真实房间 ID: %s" % _room_real_id)
 #			请求聊天服务器配置，获取 WebSocket 服务器主机列表
 			_api.chat_conf_request(room_id)
 	)
@@ -133,20 +139,12 @@ func _ready() -> void:
 #			var wss_url := "wss://{host}:{wss_port}/sub".format(host_servers[0])
 #			先尝试使用默认连接，连接失败再尝试这里请求的连接
 			_client.connect_room(_room_real_id, wss_default_url)
-			print_debug("Try connect to %s." % wss_default_url)
+			print_debug("尝试连接 %s." % wss_default_url)
 			_host_servers.append_array(host_servers)
 	)
 	_api.user_info_requested.connect(
 		func(user_info: Dictionary):
-#			这里要把 mid 强制转换成整型，否则可能会判断失败
-			if (user_info.mid as int) in user_list:
-				if user_list[(user_info.mid as int)].name.is_empty() or user_list[(user_info.mid as int)].face_url.is_empty():
-					user_list[(user_info.mid as int)].name = user_info.name
-					user_list[(user_info.mid as int)].face_url = user_info.face
-					_api.user_face_request((user_info.mid as int), user_info.face)
-			else:
-				add_user(user_info.mid, user_info.name, user_info.face)
-				print_debug("Add %d, total %d" % [user_info.mid, user_list.size()])
+			user_info_requested.emit(user_info.mid, user_info)
 #			print("[%d]编号：{mid}, 名字：{name}, 性别：{sex}, 等级：{level}".format(user_info) % user_list.size())
 	)
 	_api.user_face_requested.connect(
@@ -166,20 +164,17 @@ func _process_message(messages: PackedStringArray):
 	var json := JSON.new()
 	for message in messages:
 		if log_enabled:
-			_log_file.store_line(message)
-#		_log_file.store_string(message+"\n")
+			_log_file.store_line(Time.get_time_string_from_system() + ": " + message)
 #		print_debug(message)
 		var err = json.parse(message)
 		if err == OK:
 			var msg_data = json.data
 			if typeof(msg_data) == TYPE_DICTIONARY:
-				msg_received.emit(msg_data)
+#				msg_received.emit(msg_data)
 #				NOTE: 2022-12-06 弹幕命令后面有的会带一串不明意义的数串，这里单独处理
 				if msg_data.cmd.begins_with(MessageType.DANMU):
 					danmu_received.emit(msg_data.info[2][0], msg_data.info[2][1], msg_data.info[1])
-#					先用 uid 和 uname 生成用户对象，后续再请求头像信息
-					add_user(msg_data.info[2][0], msg_data.info[2][1])
-					print("%s[%d]说: %s" % [msg_data.info[2][1], msg_data.info[2][0], msg_data.info[1]])
+#					print("%s[%d]说: %s" % [msg_data.info[2][1], msg_data.info[2][0], msg_data.info[1]])
 #					print_debug(msg_data)
 					continue
 				match msg_data.cmd:
@@ -187,32 +182,25 @@ func _process_message(messages: PackedStringArray):
 #						NOTE: SC 有两种，SUPER_CHAT_MESSAGE 和 SUPER_CHAT_MESSAGE_JPN
 #						这里直接匹配 SUPER_CHAT_MESSAGE（JPN结尾的也会同步发送这个版本）
 						super_chat_received.emit(msg_data.data.uid, msg_data.data.user_info.uname, msg_data.data)
-#						付费留言里面用户ID、用户名和头像地址都有了，可以直接请求头像
-						add_user(msg_data.data.uid, msg_data.data.user_info.uname, msg_data.data.user_info.face)
 #						print("[SC]%s[%d]说: %s" % [msg_data.data.user_info.uname, msg_data.data.uid, msg_data.data.message])
 					MessageType.GIFT:
 #						"data":{"action":"投喂","giftId":31531,"giftName":"PK票","giftType":5,"num":1,"uid":1234567,"uname":"ABC",...}
 						gift_received.emit(msg_data.data.uid, msg_data.data.uname, msg_data.data)
-#						礼物消息里面用户ID、用户名和头像地址都有了，可以直接请求头像 
-						add_user(msg_data.data.uid, msg_data.data.uname, msg_data.data.face)
 #						print("%s%s礼物: %s x %d" % [msg_data.data.uname, msg_data.data.action, msg_data.data.giftName, msg_data.data.num])
 					MessageType.GIFTS:
 #						"data":{"action":"投喂","gift_id":30869,"gift_name":"心动卡","gift_num":0,"total_num":10,"uid":1234567,"uname":"ABC",...}
 						gift_received.emit(msg_data.data.uid, msg_data.data.uname, msg_data.data)
-#						先用 uid 和 uname 生成用户对象，后续再请求头像信息
-						add_user(msg_data.data.uid, msg_data.data.uname)
 #						print("%s%s礼物: %s x %d" % [msg_data.data.uname, msg_data.data.action, msg_data.data.gift_name, msg_data.data.total_num])
 					MessageType.USER_ENTER:
 						user_entered.emit(msg_data.data.uid, msg_data.data.uname)
 #						print("%s进入房间" % msg_data.data.uname)
 					MessageType.GUARD_ENTER:
 						guard_entered.emit(msg_data.data.uid)
-#						先用 uid 生成用户对象，后续再请求详细信息
-						add_user(msg_data.data.uid)
-						print(msg_data.data.copy_writing)
+#						print(msg_data.data.copy_writing)
 					MessageType.STOP_LIVE_ROOM:
 						pass
 					MessageType.ROOM_ENTERED:
+						room_entered.emit(msg_data.room_id)
 						print("连接直播间[%d]成功" % msg_data.room_id)
 						pass
 					MessageType.ROOM_POPULARITY:
@@ -220,6 +208,7 @@ func _process_message(messages: PackedStringArray):
 						popularity_received.emit(pop_num)
 #						print("人气: %d" % pop_num);
 					_:
+						message_unhandled.emit(msg_data)
 #						print("Unhandled: %s" % msg_data.cmd)
 						pass
 #				print_debug(message)
@@ -228,19 +217,3 @@ func _process_message(messages: PackedStringArray):
 		else:
 			printerr("JSON Parse Error: %s in %s at line %s" % [json.get_error_message(), message, json.get_error_line()])
 
-
-func add_user(uid: int, uname: String = "", uface: String = ""):
-	if uid in user_list:
-#		print("%s already in list" % uid)
-		return
-	var user = BiliveInfo.User.new(uid, uname, uface)
-	user_list[uid] = user
-	if uface.is_empty() or uname.is_empty():
-		_api.user_info_request(uid)
-	else:
-		_api.user_face_request(uid, uface)
-#	user_info_requested.emit(uid, uname, uface)
-	print("%s added: %d" % [user, user_list.size()])
-	print("Request list %d" % _api._user_info_request_uid_list.size())
-	
-	
