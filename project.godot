@@ -1,0 +1,52 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+_global_script_classes=[{
+"base": "Node",
+"class": &"BiliveAPI",
+"language": &"GDScript",
+"path": "res://addons/bilive_observer/bilive_api.gd"
+}, {
+"base": "Node",
+"class": &"BiliveClient",
+"language": &"GDScript",
+"path": "res://addons/bilive_observer/bilive_client.gd"
+}, {
+"base": "RefCounted",
+"class": &"BiliveInfo",
+"language": &"GDScript",
+"path": "res://addons/bilive_observer/bilive_info.gd"
+}, {
+"base": "Node",
+"class": &"BiliveObserver",
+"language": &"GDScript",
+"path": "res://addons/bilive_observer/bilive_observer.gd"
+}]
+_global_script_class_icons={
+"BiliveAPI": "res://addons/bilive_observer/icon/scroll.svg",
+"BiliveClient": "res://addons/bilive_observer/icon/sitemap.svg",
+"BiliveInfo": "",
+"BiliveObserver": "res://addons/bilive_observer/icon/bilibili.svg"
+}
+
+[application]
+
+config/name="BiliveObserver"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.0", "Forward Plus")
+config/icon="res://icon.svg"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/bilive_observer/plugin.cfg")
+
+[gui]
+
+theme/custom_font="res://SourceHanSansCN-Regular.otf"
