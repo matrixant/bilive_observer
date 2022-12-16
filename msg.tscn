@@ -11,16 +11,10 @@ grow_vertical = 2
 script = ExtResource("1_q3gya")
 
 [node name="Avatar" type="TextureRect" parent="."]
-offset_bottom = 648.0
+layout_mode = 2
 
 [node name="Name" type="Label" parent="."]
-offset_left = 4.0
-offset_top = 312.0
-offset_right = 5.0
-offset_bottom = 336.0
+layout_mode = 2
 
 [node name="Info" type="Label" parent="."]
-offset_left = 9.0
-offset_top = 312.0
-offset_right = 10.0
-offset_bottom = 336.0
+layout_mode = 2

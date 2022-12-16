@@ -12,3 +12,6 @@
 - BiliveObserver 使用以上两个节点完成直播间信息的获取、解析，并发送相应的信号。  
 > 也可以不使用 BiliveObserver 节点，直接通过 BiliveAPI 和 BiliveClient 实现你自己的直播弹幕处理逻辑。  
 > live_api.json 存储了一部分用户信息和直播信息的 API。我这里只用到了获取直播间信息和获取用户信息和头像的 API。  
+
+## 其它：
+demo 默认连接的是本人的直播间，如果测试的话注意修改直播间 ID。
